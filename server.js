@@ -1,25 +1,34 @@
-// server.js
 const express = require('express');
 const session = require('express-session');
+const path = require('path');
 const bcrypt = require('bcryptjs');
 const bodyParser = require('body-parser');
 const mysql = require('mysql2');
 const { check, validationResult } = require('express-validator');
+
+// Initialize the app
 const app = express();
+
+// Configure middleware
+app.use(express.json());
+app.use(bodyParser.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(bodyParser.urlencoded({ extended: false }));
 
 // Configure session middleware
 app.use(session({
-    secret: 'secret-key',
+    secret: 'werfdfrgereththytjjlokzihuhnbxcfwryu',
     resave: false,
     saveUninitialized: true
 }));
 
-// Create MySQL connection
+// Create database server connection
 const connection = mysql.createConnection({
     host: 'localhost',
+    port: 3307,
     user: 'root',
-    password: '',
-    database: 'learning_management'
+    password: 'Brian@254',
+    database: 'expense_tracker',
 });
 
 // Connect to MySQL
@@ -28,54 +37,65 @@ connection.connect((err) => {
         console.error('Error connecting to MySQL: ' + err.stack);
         return;
     }
-    console.log('Connected to MySQL as id ' + connection.threadId);
+    console.log('Connected to expense_tracker as id ' + connection.threadId);
 });
 
-// Set up middleware to parse incoming data
-app.use(express.json());
-app.use(bodyParser.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Define routes
-app.get('/', (req, res) => {
-    res.sendFile(__dirname + '/index.html');
-});
-
-
-  
-// Define a User representation for clarity
+// Define a User object - registration
 const User = {
-    tableName: 'users', 
-    createUser: function(newUser, callback) {
+    tableName: 'users',
+    createUser: function (newUser, callback) {
         connection.query('INSERT INTO ' + this.tableName + ' SET ?', newUser, callback);
-    },  
-    getUserByEmail: function(email, callback) {
-        connection.query('SELECT * FROM ' + this.tableName + ' WHERE email = ?', email, callback);
     },
-    getUserByUsername: function(username, callback) {
-        connection.query('SELECT * FROM ' + this.tableName + ' WHERE username = ?', username, callback);
-    }
+    getUserByEmail: function (email, callback) {
+        connection.query('SELECT * FROM ' + this.tableName + ' WHERE email = ?', [email], callback);
+    },
+    getUserByUsername: function (username, callback) {
+        connection.query('SELECT * FROM ' + this.tableName + ' WHERE username = ?', [username], callback);
+    },
 };
+
+// Serve the registration HTML file
+app.get('/register', (req, res) => {
+    res.sendFile(path.join(__dirname, 'register.html'));
+});
+
+// Serve the login HTML file
+app.get('/login', (req, res) => {
+    res.sendFile(path.join(__dirname, 'login.html'));
+});
 
 // Registration route
 app.post('/register', [
     // Validate email and username fields
-    check('email').isEmail(),
+    check('email').isEmail().withMessage('Provide valid email'),
     check('username').isAlphanumeric().withMessage('Username must be alphanumeric'),
 
     // Custom validation to check if email and username are unique
-    check('email').custom(async (value) => {
-        const user = await User.getUserByEmail(value);
-        if (user) {
-            throw new Error('Email already exists');
-        }
+    check('email').custom((value) => {
+        return new Promise((resolve, reject) => {
+            User.getUserByEmail(value, (err, results) => {
+                if (err) {
+                    reject(new Error('Server error'));
+                }
+                if (results.length > 0) {
+                    reject(new Error('Email already exists'));
+                }
+                resolve(true);
+            });
+        });
     }),
-    check('username').custom(async (value) => {
-        const user = await User.getUserByUsername(value);
-        if (user) {
-            throw new Error('Username already exists');
-        }
+    check('username').custom((value) => {
+        return new Promise((resolve, reject) => {
+            User.getUserByUsername(value, (err, results) => {
+                if (err) {
+                    reject(new Error('Server error'));
+                }
+                if (results.length > 0) {
+                    reject(new Error('Username already exists'));
+                }
+                resolve(true);
+            });
+        });
     }),
 ], async (req, res) => {
     // Check for validation errors
@@ -93,50 +113,58 @@ app.post('/register', [
         email: req.body.email,
         username: req.body.username,
         password: hashedPassword,
-        full_name: req.body.full_name
     };
 
-    // Insert user into MySQL
-    User.createUser(newUser, (error, results, fields) => {
+    // Insert user into database
+    User.createUser(newUser, (error, results) => {
         if (error) {
-          console.error('Error inserting user: ' + error.message);
-          return res.status(500).json({ error: error.message });
+            console.error('Error inserting user: ' + error.message);
+            return res.status(500).json({ error: error.message });
         }
         console.log('Inserted a new user with id ' + results.insertId);
-        res.status(201).json(newUser);
-      });
+        res.status(201).json('Registration succesful');
+    });
 });
 
 // Login route
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
+
     // Retrieve user from database
     connection.query('SELECT * FROM users WHERE username = ?', [username], (err, results) => {
         if (err) throw err;
         if (results.length === 0) {
-            res.status(401).send('Invalid username or password');
-        } else {
-            const user = results[0];
-            // Compare passwords
-            bcrypt.compare(password, user.password, (err, isMatch) => {
-                if (err) throw err;
-                if (isMatch) {
-                    // Store user in session
-                    req.session.user = user;
-                    res.send('Login successful');
-                } else {
-                    res.status(401).send('Invalid username or password');
-                }
-            });
+            return res.status(401).send('Invalid username or password');
         }
+
+        const user = results[0];
+        // Compare passwords
+        bcrypt.compare(password, user.password, (err, isMatch) => {
+            if (err) throw err;
+            if (isMatch) {
+                // Store user in session
+                req.session.user = user;
+                return res.send('Login successful');
+            } else {
+                return res.status(401).send('Invalid username or password');
+            }
+        });
     });
 });
 
-//Dashboard route
-app.get('/dashboard', (req, res) => {
-    // Assuming you have middleware to handle user authentication and store user information in req.user
-    const userFullName = req.user.full_name;
-    res.render('dashboard', { fullName: userFullName });
+// Middleware to handle user authentication
+const userAuthenticated = (req, res, next) => {
+    if (req.session.user) {
+        next();
+    } else {
+        res.redirect('/login');
+    }
+};
+
+// Dashboard route
+app.get('/dashboard', userAuthenticated, (req, res) => {
+    const userFullName = req.session.user.username;
+    res.render('dashboard', { username: userFullName });
 });
 
 // Start server
